@@ -409,6 +409,104 @@ function buildGenerationSection(pngText) {
   return html;
 }
 
+function tryUnescapeJSON(v) {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'object' && parsed !== null) return parsed;
+  } catch {}
+  return null;
+}
+
+function extractNestedJSON(sources) {
+  const results = [];
+  const seen = new Set();
+  for (const [sourceName, data] of Object.entries(sources)) {
+    if (!data || typeof data !== 'object') continue;
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value !== 'string') continue;
+      const parsed = tryUnescapeJSON(value);
+      if (!parsed) continue;
+      const label = `${sourceName} → ${key}`;
+      if (!seen.has(label)) {
+        seen.add(label);
+        results.push({ label, key, data: parsed });
+      }
+    }
+  }
+  return results;
+}
+
+function buildNestedJSONSection(nestedItems) {
+  if (!nestedItems.length) return '';
+  let html = '';
+  for (const item of nestedItems) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <h2>${esc(item.label)}</h2>
+        </div>
+        <div class="section-body">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button>
+          <pre class="json-pre">${esc(JSON.stringify(item.data, null, 2))}</pre>
+        </div>
+      </div>`;
+  }
+  return html;
+}
+
+function tryUnescapeJSON(v) {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'object' && parsed !== null) return parsed;
+  } catch {}
+  return null;
+}
+
+function extractNestedJSON(sources) {
+  const results = [];
+  const seen = new Set();
+  for (const [sourceName, data] of Object.entries(sources)) {
+    if (!data || typeof data !== 'object') continue;
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value !== 'string') continue;
+      const parsed = tryUnescapeJSON(value);
+      if (!parsed) continue;
+      const label = `${sourceName} → ${key}`;
+      if (!seen.has(label)) {
+        seen.add(label);
+        results.push({ label, key, data: parsed });
+      }
+    }
+  }
+  return results;
+}
+
+function buildNestedJSONSection(nestedItems) {
+  if (!nestedItems.length) return '';
+  let html = '';
+  for (const item of nestedItems) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <h2>${esc(item.label)}</h2>
+        </div>
+        <div class="section-body">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button>
+          <pre class="json-pre">${esc(JSON.stringify(item.data, null, 2))}</pre>
+        </div>
+      </div>`;
+  }
+  return html;
+}
+
 function buildMetadataSections(exif, xmp, iptc, iccp, pngText) {
   let html = '';
 
@@ -424,6 +522,162 @@ function buildMetadataSections(exif, xmp, iptc, iccp, pngText) {
           <div class="section-body">${body}</div>
         </div>`;
     }
+  }
+
+  if (iptc && Object.keys(iptc).length > 0) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <h2>IPTC Metadata</h2>
+        </div>
+        <div class="section-body">${buildKVTable(iptc)}</div>
+      </div>`;
+  }
+
+  if (pngText) {
+    const genKeys = new Set(['Prompt', 'Workflow', 'parameters', 'Source', 'Software', 'Creation Time', 'Creation Process']);
+    const other = {};
+    for (const [k, v] of Object.entries(pngText)) {
+      if (!genKeys.has(k)) other[k] = v;
+    }
+    if (Object.keys(other).length) {
+      const rows = Object.entries(other).map(([k, v]) => {
+        let display = v;
+        try {
+          if (v.trim().startsWith('{') || v.trim().startsWith('[')) {
+            display = formatJSON(v);
+          }
+        } catch {}
+        return `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${typeof display === 'string' && display.length > 500 ? `<pre class="json-pre">${esc(display)}</pre>` : esc(String(display))}</td></tr>`;
+      }).join('');
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
+            <h2>Embedded Text</h2>
+          </div>
+          <div class="section-body">
+            <table class="meta-table">${rows}</table>
+          </div>
+        </div>`;
+    }
+  }
+
+  const userComment = exif?.UserComment || exif?.usercomment;
+  if (userComment && typeof userComment === 'string') {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <h2>Comments</h2>
+        </div>
+        <div class="section-body"><p class="meta-val">${esc(String(userComment))}</p></div>
+      </div>`;
+  }
+
+  html += buildICCSection(iccp);
+
+  if (exif) {
+    const cameraKeys = new Set(['Make','Model','LensModel','FNumber','ExposureTime','ISO','FocalLength','FocalLengthIn35mmFormat','Flash','WhiteBalance','MeteringMode','ExposureProgram','DateTimeOriginal','DateTimeDigitized','DateTime','latitude','longitude','GPSLatitude','GPSLongitude','GPSLatitudeRef','GPSLongitudeRef','GPSAltitude','UserComment','usercomment','Orientation','ImageWidth','ImageHeight','ExifImageWidth','ExifImageHeight','XResolution','YResolution','ResolutionUnit','Software','Artist','Copyright','ColorSpace','BitsPerSample','Compression','PhotometricInterpretation','SamplesPerPixel','PlanarConfiguration','YCbCrSubSampling','YCbCrPositioning','ExifVersion','FlashpixVersion','SceneCaptureType','DigitalZoomRatio','SubjectDistance','MaxApertureValue','LightSource','ExposureBiasValue','ExposureMode','ExposureIndex','SensingMethod','FileSource','CustomRendered','GainControl','Contrast','Saturation','Sharpness','SubjectDistanceRange','InteroperabilityIndex','thumbnail']);
+    const remaining = {};
+    for (const [k, v] of Object.entries(exif)) {
+      if (!cameraKeys.has(k) && !(k in (iptc || {})) && !(k in (xmp || {}))) {
+        remaining[k] = v;
+      }
+    }
+    if (Object.keys(remaining).length > 0) {
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <h2>Additional EXIF</h2>
+          </div>
+          <div class="section-body">${buildKVTable(remaining)}</div>
+        </div>`;
+    }
+  }
+
+  return html;
+}
+  }
+
+  if (iptc && Object.keys(iptc).length > 0) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <h2>IPTC Metadata</h2>
+        </div>
+        <div class="section-body">${buildKVTable(iptc)}</div>
+      </div>`;
+  }
+
+  if (pngText) {
+    const genKeys = new Set(['Prompt', 'Workflow', 'parameters', 'Source', 'Software', 'Creation Time', 'Creation Process']);
+    const other = {};
+    for (const [k, v] of Object.entries(pngText)) {
+      if (!genKeys.has(k)) other[k] = v;
+    }
+    if (Object.keys(other).length) {
+      const rows = Object.entries(other).map(([k, v]) => {
+        let display = v;
+        try {
+          if (v.trim().startsWith('{') || v.trim().startsWith('[')) {
+            display = formatJSON(v);
+          }
+        } catch {}
+        return `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${typeof display === 'string' && display.length > 500 ? `<pre class="json-pre">${esc(display)}</pre>` : esc(String(display))}</td></tr>`;
+      }).join('');
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
+            <h2>Embedded Text</h2>
+          </div>
+          <div class="section-body">
+            <table class="meta-table">${rows}</table>
+          </div>
+        </div>`;
+    }
+  }
+
+  const userComment = exif?.UserComment || exif?.usercomment;
+  if (userComment && typeof userComment === 'string') {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <h2>Comments</h2>
+        </div>
+        <div class="section-body"><p class="meta-val">${esc(String(userComment))}</p></div>
+      </div>`;
+  }
+
+  html += buildICCSection(iccp);
+
+  if (exif) {
+    const cameraKeys = new Set(['Make','Model','LensModel','FNumber','ExposureTime','ISO','FocalLength','FocalLengthIn35mmFormat','Flash','WhiteBalance','MeteringMode','ExposureProgram','DateTimeOriginal','DateTimeDigitized','DateTime','latitude','longitude','GPSLatitude','GPSLongitude','GPSLatitudeRef','GPSLongitudeRef','GPSAltitude','UserComment','usercomment','Orientation','ImageWidth','ImageHeight','ExifImageWidth','ExifImageHeight','XResolution','YResolution','ResolutionUnit','Software','Artist','Copyright','ColorSpace','BitsPerSample','Compression','PhotometricInterpretation','SamplesPerPixel','PlanarConfiguration','YCbCrSubSampling','YCbCrPositioning','ExifVersion','FlashpixVersion','SceneCaptureType','DigitalZoomRatio','SubjectDistance','MaxApertureValue','LightSource','ExposureBiasValue','ExposureMode','ExposureIndex','SensingMethod','FileSource','CustomRendered','GainControl','Contrast','Saturation','Sharpness','SubjectDistanceRange','InteroperabilityIndex','thumbnail']);
+    const remaining = {};
+    for (const [k, v] of Object.entries(exif)) {
+      if (!cameraKeys.has(k) && !(k in (iptc || {})) && !(k in (xmp || {}))) {
+        remaining[k] = v;
+      }
+    }
+    if (Object.keys(remaining).length > 0) {
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <h2>Additional EXIF</h2>
+          </div>
+          <div class="section-body">${buildKVTable(remaining)}</div>
+        </div>`;
+    }
+  }
+
+  return html;
+}
   }
 
   if (iptc && Object.keys(iptc).length > 0) {
