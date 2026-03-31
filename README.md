@@ -100,6 +100,12 @@ https://kibotu.github.io/image-meta-data/?url=https://example.com/photo.jpg
 - [exifr](https://github.com/MikeKovarik/exifr) — Blazing fast EXIF/IPTC/XMP/ICC parser
 - Pure HTML, CSS, and JavaScript — no build step, no framework
 
+## Support
+
+If this saved you a few hours (or a few `if` statements), consider buying me a coffee. ☕
+
+<a href="https://www.buymeacoffee.com/" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45" width="160"></a>
+
 ## License
 
 MIT — do whatever you want with it.

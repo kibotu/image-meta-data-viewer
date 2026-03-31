@@ -473,6 +473,23 @@ function buildPNGChunksHTML(chunks) {
     `<table class="meta-table">${rows}</table><p class="meta-note">${chunks.length} chunks · critical = uppercase, ancillary = lowercase</p>`);
 }
 
+function buildSupportSection() {
+  return `
+    <div class="section support-section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        <h2>Support</h2>
+      </div>
+      <div class="section-body">
+        <p class="support-text">If this saved you a few hours (or a few <code>if</code> statements), consider buying me a coffee.</p>
+        <a href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer" class="coffee-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></svg>
+          Buy me a coffee
+        </a>
+      </div>
+    </div>`;
+}
+
 /* ── main logic ──────────────────────────────────────── */
 
 async function processFile(file, bytes) {
@@ -542,6 +559,7 @@ async function processFile(file, bytes) {
   html += buildNestedJSONSection(extractNestedJSON({ EXIF: exifData, XMP: xmpData, IPTC: iptcData, 'PNG Text': pngText }));
   html += buildMagicHTML(bytes);
   if (format === 'PNG') html += buildPNGChunksHTML(pngChunks);
+  html += buildSupportSection();
 
   const rawObj = {
     file: { name: file.name, size: file.size, type: file.type, lastModified: new Date(file.lastModified).toISOString() },
@@ -712,6 +730,13 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .workflow-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .prompt-text { background: var(--bg); border-radius: 8px; padding: 16px; overflow: auto; max-height: 400px; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .json-pre { background: var(--bg); border-radius: 8px; padding: 16px; overflow: auto; max-height: 600px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; color: var(--text2); white-space: pre-wrap; word-break: break-word; }
+.support-section { text-align: center; border-color: var(--accent); }
+.support-section .section-body { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.support-text { color: var(--text2); font-size: 15px; }
+.support-text code { background: var(--bg3); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
+.coffee-btn { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px; transition: background 0.2s, transform 0.2s; }
+.coffee-btn:hover { background: var(--accent2); transform: translateY(-2px); }
+.coffee-btn svg { width: 18px; height: 18px; }
 @media (max-width: 640px) {
   .quick-facts { grid-template-columns: repeat(3, 1fr); }
   #drop-zone { margin: 12px; min-height: 70vh; }
