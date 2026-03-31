@@ -1,4 +1,4 @@
-# Image Meta Viewer
+# Image Meta Data Viewer
 
 **See everything about your image — instantly, privately, in your browser.**
 
@@ -20,7 +20,7 @@ Every day, photographers, designers, developers, and even CEOs need to answer si
 
 Existing tools are either **desktop apps you need to install**, **online services that upload your files to who-knows-where**, or **command-line tools** that require technical knowledge.
 
-Image Meta Viewer solves this with a **single webpage** that runs entirely in your browser. Your image never leaves your computer.
+Image Meta Data Viewer solves this with a **single webpage** that runs entirely in your browser. Your image never leaves your computer.
 
 ## Features
 
