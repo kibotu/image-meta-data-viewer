@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Meta Viewer</title>
+<meta name="description" content="See everything about your image — instantly, privately, in your browser.">
+<script src="vendor/exifr.js"></script>
+<script type="module">
+
+const exifr = window.exifr;
+
+/* ── helpers ─────────────────────────────────────────── */
+
+const $ = s => document.querySelector(s);
+
+function humanBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'kB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function aspectRatio(w, h) {
+  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  const d = gcd(w, h);
+  const rw = w / d, rh = h / d;
+  if (rw <= 30 && rh <= 30) return rw === rh ? '1:1' : `${rw}:${rh}`;
+  return (w / h).toFixed(2) + ':1';
+}
+
+function megapixels(w, h) { return (w * h / 1e6).toFixed(2); }
+
+function orientationLabel(w, h, exifOrient) {
+  const tags = { 1:'Normal', 3:'Rotated 180°', 6:'Rotated 90° CW', 8:'Rotated 90° CCW' };
+  const base = w > h ? 'Landscape' : w < h ? 'Portrait' : 'Square';
+  return exifOrient && tags[exifOrient] ? `${base} (${tags[exifOrient]})` : base;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function formatJSON(v) {
+  try {
+    if (typeof v === 'string' && (v.trim().startsWith('{') || v.trim().startsWith('['))) {
+      return JSON.stringify(JSON.parse(v), null, 2);
+    }
+    if (typeof v === 'object' && v !== null) {
+      return JSON.stringify(v, null, 2);
+    }
+  } catch {}
+  return String(v);
+}
+
+/* ── PNG chunk parser ────────────────────────────────── */
+
+function parsePNGChunks(bytes) {
+  const chunks = [];
+  if (bytes.length < 8) return chunks;
+  const sig = [137,80,78,71,13,10,26,10];
+  if (bytes.slice(0, 8).every((b, i) => b === sig[i])) {
+    let offset = 8;
+    while (offset + 8 <= bytes.length) {
+      const length = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+      const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
+      const dataStart = offset + 8;
+      chunks.push({ type, length, dataStart, dataEnd: dataStart + length });
+      offset += 12 + length;
+      if (length > 50000000) break;
+    }
+  }
+  return chunks;
+}
+
+function parsePNGTextChunks(bytes, chunks) {
+  const texts = {};
+  for (const chunk of chunks) {
+    if (chunk.type !== 'tEXt' && chunk.type !== 'iTXt' && chunk.type !== 'zTXt') continue;
+    if (chunk.dataEnd > bytes.length) continue;
+    const data = bytes.slice(chunk.dataStart, chunk.dataEnd);
+    try {
+      if (chunk.type === 'tEXt') {
+        const nullIdx = data.indexOf(0);
+        if (nullIdx > 0) {
+          const key = new TextDecoder('latin1').decode(data.slice(0, nullIdx));
+          const value = new TextDecoder('utf-8').decode(data.slice(nullIdx + 1));
+          texts[key] = value;
+        }
+      } else if (chunk.type === 'iTXt') {
+        const nullIdx = data.indexOf(0);
+        if (nullIdx > 0) {
+          const key = new TextDecoder('utf-8').decode(data.slice(0, nullIdx));
+          const rest = data.slice(nullIdx + 1);
+          const compressionFlag = rest[0];
+          const rest2 = rest.slice(2);
+          const langNull = rest2.indexOf(0);
+          const transNull = rest2.indexOf(0, langNull + 1);
+          const textData = rest2.slice(transNull + 1);
+          texts[key] = compressionFlag === 0
+            ? new TextDecoder('utf-8').decode(textData)
+            : `[compressed, ${textData.length} bytes]`;
+        }
+      } else if (chunk.type === 'zTXt') {
+        const nullIdx = data.indexOf(0);
+        if (nullIdx > 0) {
+          const key = new TextDecoder('latin1').decode(data.slice(0, nullIdx));
+          texts[key] = `[zlib compressed, ${data.length - nullIdx - 2} bytes]`;
+        }
+      }
+    } catch {}
+  }
+  return texts;
+}
+
+function parsePNGIHDR(bytes, chunks) {
+  const ihdr = chunks.find(c => c.type === 'IHDR');
+  if (!ihdr || ihdr.length < 13 || ihdr.dataEnd > bytes.length) return null;
+  const d = bytes.slice(ihdr.dataStart, ihdr.dataStart + 13);
+  const colorTypes = { 0:'Grayscale', 2:'RGB', 3:'Indexed (Palette)', 4:'Grayscale + Alpha', 6:'RGB + Alpha' };
+  return {
+    width: (d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3],
+    height: (d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7],
+    bitDepth: d[8],
+    colorType: d[9],
+    colorTypeLabel: colorTypes[d[9]] || `Unknown (${d[9]})`,
+    compression: d[10] === 0 ? 'Deflate/Inflate' : `Unknown (${d[10]})`,
+    filter: d[11] === 0 ? 'Adaptive' : `Unknown (${d[11]})`,
+    interlace: d[12] === 0 ? 'Noninterlaced' : d[12] === 1 ? 'Adam7' : `Unknown (${d[12]})`,
+  };
+}
+
+/* ── magic bytes ─────────────────────────────────────── */
+
+const MAGIC_SIGNATURES = [
+  { pattern: [0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A], name: 'PNG', desc: 'Portable Network Graphics' },
+  { pattern: [0xFF,0xD8,0xFF], name: 'JPEG', desc: 'Joint Photographic Experts Group' },
+  { pattern: [0x47,0x49,0x46,0x38,0x37,0x61], name: 'GIF 87a', desc: 'Graphics Interchange Format 87a' },
+  { pattern: [0x47,0x49,0x46,0x38,0x39,0x61], name: 'GIF 89a', desc: 'Graphics Interchange Format 89a' },
+  { pattern: [0x52,0x49,0x46,0x46], name: 'RIFF-based', desc: 'Resource Interchange File Format (WebP, AVI, WAV…)' },
+  { pattern: [0x42,0x4D], name: 'BMP', desc: 'Bitmap Image File' },
+  { pattern: [0x49,0x49,0x2A,0x00], name: 'TIFF (little-endian)', desc: 'Tagged Image File Format' },
+  { pattern: [0x4D,0x4D,0x00,0x2A], name: 'TIFF (big-endian)', desc: 'Tagged Image File Format' },
+  { pattern: [0x00,0x00,0x01,0x00], name: 'ICO', desc: 'Windows Icon' },
+  { pattern: [0x00,0x00,0x02,0x00], name: 'CUR', desc: 'Windows Cursor' },
+];
+
+function detectMagic(bytes) {
+  for (const sig of MAGIC_SIGNATURES) {
+    const off = sig.offset || 0;
+    if (bytes.length < off + sig.pattern.length) continue;
+    if (sig.pattern.every((b, i) => bytes[off + i] === b)) return sig;
+  }
+  return null;
+}
+
+function buildMagicHTML(bytes) {
+  const sig = detectMagic(bytes);
+  const len = 48;
+  const slice = bytes.slice(0, len);
+  const sigEnd = sig ? (sig.offset || 0) + sig.pattern.length : 0;
+
+  let hexHTML = '';
+  let asciiArr = [];
+  slice.forEach((b, i) => {
+    const isSig = sig && i < sigEnd && i >= (sig.offset || 0);
+    hexHTML += `<span class="${isSig ? 'sig' : ''}">${b.toString(16).toUpperCase().padStart(2, '0')}</span>`;
+    asciiArr.push((b >= 32 && b <= 126) ? String.fromCharCode(b) : '.');
+  });
+
+  let explanation = '';
+  if (sig) {
+    explanation = `<div class="magic-explain">
+      <p class="magic-title">${sig.name}</p>
+      <p class="magic-sub">${sig.desc} — signature matched at byte ${(sig.offset || 0)}</p>
+    </div>`;
+  } else {
+    explanation = `<div class="magic-explain">
+      <p class="magic-title">Unrecognized signature</p>
+      <p class="magic-sub">Could not match a known file type from the magic bytes</p>
+    </div>`;
+  }
+
+  const dnaLen = 32;
+  let dnaHTML = '';
+  for (let i = 0; i < dnaLen && i < bytes.length; i++) {
+    const v = bytes[i] / 255;
+    const hue = (v * 260) % 360;
+    const lightness = 20 + v * 50;
+    dnaHTML += `<span style="background:hsl(${hue},70%,${lightness}%)" title="Byte ${i}: 0x${bytes[i].toString(16).toUpperCase().padStart(2,'0')}"></span>`;
+  }
+
+  return `
+    <div class="magic-section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <h2>File Signature</h2>
+      </div>
+      ${explanation}
+      <div class="hex-dump">
+        <div class="hex-row">${hexHTML}</div>
+        <div class="ascii-row">${esc(asciiArr.join(''))}</div>
+      </div>
+      <div class="dna-strip">${dnaHTML}</div>
+      <div class="magic-meta">
+        <span>${bytes.length} bytes total</span>
+        <span>${sig ? sig.name : 'Unknown'} format</span>
+      </div>
+    </div>`;
+}
+
+/* ── ICC profile display ─────────────────────────────── */
+
+function buildICCSection(iccp) {
+  if (!iccp || Object.keys(iccp).length === 0) return '';
+
+  const fields = [
+    ['Description', iccp.ProfileDescription || iccp.profiledescription],
+    ['Copyright', iccp.Copyright || iccp.profilecopyright],
+    ['Creator', iccp.ProfileCreator || iccp.profilecreator],
+    ['Platform', iccp.PrimaryPlatform || iccp.primaryplatform],
+    ['Device Manufacturer', iccp.DeviceManufacturer || iccp.devicemanufacturer],
+    ['Device Model', iccp.DeviceModel || iccp.devicemodel],
+    ['Color Space', iccp.ColorSpaceData || iccp.colorspacedata],
+    ['Connection Space', iccp.ProfileConnectionSpace || iccp.profileconnectionspace],
+    ['Profile Class', iccp.ProfileClass || iccp.profileclass],
+    ['Version', iccp.ProfileVersion || iccp.profileversion],
+    ['CMM Type', iccp.ProfileCMMType || iccp.profilecmmtype],
+    ['Rendering Intent', iccp.RenderingIntent || iccp.renderingintent],
+    ['Profile Date', iccp.ProfileDateTime || iccp.profiledatetime],
+    ['Profile Signature', iccp.ProfileFileSignature || iccp.profilefilesignature],
+    ['Flags', iccp.CmmFlags || iccp.cmmflags],
+    ['Device Attributes', iccp.DeviceAttributes || iccp.deviceattributes],
+    ['Media White Point', iccp.MediaWhitePoint || iccp.mediawhitepoint],
+    ['Red Matrix', iccp.RedMatrixColumn || iccp.redmatrixcolumn],
+    ['Green Matrix', iccp.GreenMatrixColumn || iccp.greenmatrixcolumn],
+    ['Blue Matrix', iccp.BlueMatrixColumn || iccp.bluematrixcolumn],
+    ['Chromatic Adaptation', iccp.ChromaticAdaptation || iccp.chromaticadaptation],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+
+  if (!fields.length) return '';
+
+  const rows = fields.map(([k, v]) => `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${esc(String(v))}</td></tr>`).join('');
+
+  return `
+    <div class="section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <h2>ICC Profile</h2>
+      </div>
+      <div class="section-body">
+        <table class="meta-table">${rows}</table>
+      </div>
+    </div>`;
+}
+
+/* ── EXIF / XMP / IPTC sections ──────────────────────── */
+
+function buildKVTable(obj, skipKeys = new Set()) {
+  const skip = new Set(['thumbnail', 'ifd0', 'ifd1', 'Interop', 'SubIFD', 'GPS', ...skipKeys]);
+  let rows = '';
+  for (const [k, v] of Object.entries(obj)) {
+    if (skip.has(k)) continue;
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'object') {
+      if (v instanceof Date) {
+        rows += `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${esc(v.toLocaleString())}</td></tr>`;
+      } else if (ArrayBuffer.isView(v) || v instanceof ArrayBuffer) {
+        const arr = new Uint8Array(v);
+        rows += `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">(binary data, ${arr.length} bytes)</td></tr>`;
+      } else {
+        rows += `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val"><pre class="json-pre">${esc(formatJSON(v))}</pre></td></tr>`;
+      }
+    } else {
+      rows += `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${esc(String(v))}</td></tr>`;
+    }
+  }
+  return rows ? `<table class="meta-table">${rows}</table>` : '<p class="empty">No data found</p>';
+}
+
+function buildCameraSection(exif) {
+  if (!exif) return '';
+  const hasCamera = exif.Make || exif.Model || exif.LensModel || exif.FNumber || exif.ExposureTime || exif.ISO || exif.FocalLength || exif.FocalLengthIn35mmFormat;
+  if (!hasCamera) return '';
+
+  const rows = [
+    ['Camera', [exif.Make, exif.Model].filter(Boolean).join(' ')],
+    ['Lens', exif.LensModel],
+    ['Focal Length', exif.FocalLengthIn35mmFormat ? Math.round(exif.FocalLengthIn35mmFormat) + ' mm (35mm equiv)' : exif.FocalLength ? Math.round(exif.FocalLength) + ' mm' : undefined],
+    ['Aperture', exif.FNumber ? 'f/' + exif.FNumber.toFixed(1) : undefined],
+    ['Shutter Speed', exif.ExposureTime ? (exif.ExposureTime >= 1 ? exif.ExposureTime.toFixed(1) + ' s' : '1/' + Math.round(1 / exif.ExposureTime) + ' s') : undefined],
+    ['ISO', exif.ISO ? 'ISO ' + exif.ISO : undefined],
+    ['Flash', exif.Flash !== undefined ? (typeof exif.Flash === 'object' ? JSON.stringify(exif.Flash) : exif.Flash) : undefined],
+    ['White Balance', exif.WhiteBalance],
+    ['Metering Mode', exif.MeteringMode],
+    ['Exposure Program', exif.ExposureProgram],
+    ['Date Taken', exif.DateTimeOriginal ? (exif.DateTimeOriginal instanceof Date ? exif.DateTimeOriginal.toLocaleString() : exif.DateTimeOriginal) : undefined],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+
+  if (!rows.length) return '';
+
+  let html = rows.map(([k, v]) => `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${esc(String(v))}</td></tr>`).join('');
+
+  if (exif.latitude && exif.longitude) {
+    const toDec = (d) => Array.isArray(d) ? d[0] + d[1] / 60 + (d[2] || 0) / 3600 : d;
+    const lat = toDec(exif.latitude), lon = toDec(exif.longitude);
+    html += `<tr><td class="meta-key">GPS</td><td class="meta-val"><span class="gps-coords">${lat.toFixed(6)}, ${lon.toFixed(6)}</span></td></tr>`;
+  }
+
+  return `
+    <div class="section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        <h2>Camera &amp; Capture</h2>
+      </div>
+      <div class="section-body">${html}</div>
+    </div>`;
+}
+
+function buildGenerationSection(pngText) {
+  if (!pngText) return '';
+  const genKeys = ['Prompt', 'Workflow', 'parameters', 'Source', 'Software', 'Creation Time', 'Creation Process'];
+  const found = {};
+  for (const k of genKeys) {
+    if (pngText[k] !== undefined) found[k] = pngText[k];
+  }
+  if (!Object.keys(found).length) return '';
+
+  let html = '';
+
+  if (found.Prompt) {
+    const isJSON = found.Prompt.trim().startsWith('{');
+    let displayPrompt = found.Prompt;
+    let promptLabel = 'Prompt';
+    if (isJSON) {
+      try {
+        const parsed = JSON.parse(found.Prompt);
+        const texts = [];
+        for (const [, node] of Object.entries(parsed)) {
+          if (node.class_type === 'CLIPTextEncode' && node.inputs?.text) {
+            texts.push(node.inputs.text);
+          }
+        }
+        if (texts.length) {
+          displayPrompt = texts.join('\n\n---\n\n');
+          promptLabel = 'Prompt (ComfyUI)';
+        } else {
+          displayPrompt = formatJSON(parsed);
+        }
+      } catch {
+        displayPrompt = found.Prompt;
+      }
+    }
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          <h2>${esc(promptLabel)}</h2>
+        </div>
+        <div class="section-body">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button>
+          <pre class="prompt-text">${esc(displayPrompt)}</pre>
+        </div>
+      </div>`;
+  }
+
+  if (found.Workflow) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <h2>Workflow</h2>
+        </div>
+        <div class="section-body">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button>
+          <pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>
+        </div>
+      </div>`;
+  }
+
+  const other = {};
+  for (const [k, v] of Object.entries(found)) {
+    if (k !== 'Prompt' && k !== 'Workflow') other[k] = v;
+  }
+  if (Object.keys(other).length) {
+    const rows = Object.entries(other).map(([k, v]) => {
+      let display = v;
+      try {
+        if (v.trim().startsWith('{') || v.trim().startsWith('[')) {
+          display = formatJSON(v);
+        }
+      } catch {}
+      return `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val"><pre class="json-pre">${esc(String(display))}</pre></td></tr>`;
+    }).join('');
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <h2>Generation Details</h2>
+        </div>
+        <div class="section-body">
+          <table class="meta-table">${rows}</table>
+        </div>
+      </div>`;
+  }
+
+  return html;
+}
+
+function buildMetadataSections(exif, xmp, iptc, iccp, pngText) {
+  let html = '';
+
+  if (xmp && Object.keys(xmp).length > 0) {
+    const body = buildKVTable(xmp);
+    if (body && !body.includes('No data found')) {
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <h2>XMP Metadata</h2>
+          </div>
+          <div class="section-body">${body}</div>
+        </div>`;
+    }
+  }
+
+  if (iptc && Object.keys(iptc).length > 0) {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <h2>IPTC Metadata</h2>
+        </div>
+        <div class="section-body">${buildKVTable(iptc)}</div>
+      </div>`;
+  }
+
+  if (pngText) {
+    const genKeys = new Set(['Prompt', 'Workflow', 'parameters', 'Source', 'Software', 'Creation Time', 'Creation Process']);
+    const other = {};
+    for (const [k, v] of Object.entries(pngText)) {
+      if (!genKeys.has(k)) other[k] = v;
+    }
+    if (Object.keys(other).length) {
+      const rows = Object.entries(other).map(([k, v]) => {
+        let display = v;
+        try {
+          if (v.trim().startsWith('{') || v.trim().startsWith('[')) {
+            display = formatJSON(v);
+          }
+        } catch {}
+        return `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${typeof display === 'string' && display.length > 500 ? `<pre class="json-pre">${esc(display)}</pre>` : esc(String(display))}</td></tr>`;
+      }).join('');
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="16" x2="12" y2="21"/></svg>
+            <h2>Embedded Text</h2>
+          </div>
+          <div class="section-body">
+            <table class="meta-table">${rows}</table>
+          </div>
+        </div>`;
+    }
+  }
+
+  const userComment = exif?.UserComment || exif?.usercomment;
+  if (userComment && typeof userComment === 'string') {
+    html += `
+      <div class="section">
+        <div class="section-header">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <h2>Comments</h2>
+        </div>
+        <div class="section-body"><p class="meta-val">${esc(String(userComment))}</p></div>
+      </div>`;
+  }
+
+  html += buildICCSection(iccp);
+
+  if (exif) {
+    const cameraKeys = new Set(['Make','Model','LensModel','FNumber','ExposureTime','ISO','FocalLength','FocalLengthIn35mmFormat','Flash','WhiteBalance','MeteringMode','ExposureProgram','DateTimeOriginal','DateTimeDigitized','DateTime','latitude','longitude','GPSLatitude','GPSLongitude','GPSLatitudeRef','GPSLongitudeRef','GPSAltitude','UserComment','usercomment','Orientation','ImageWidth','ImageHeight','ExifImageWidth','ExifImageHeight','XResolution','YResolution','ResolutionUnit','Software','Artist','Copyright','ColorSpace','BitsPerSample','Compression','PhotometricInterpretation','SamplesPerPixel','PlanarConfiguration','YCbCrSubSampling','YCbCrPositioning','ExifVersion','FlashpixVersion','SceneCaptureType','DigitalZoomRatio','SubjectDistance','MaxApertureValue','LightSource','ExposureBiasValue','ExposureMode','ExposureIndex','SensingMethod','FileSource','CustomRendered','GainControl','Contrast','Saturation','Sharpness','SubjectDistanceRange','InteroperabilityIndex','thumbnail']);
+    const remaining = {};
+    for (const [k, v] of Object.entries(exif)) {
+      if (!cameraKeys.has(k) && !(k in (iptc || {})) && !(k in (xmp || {}))) {
+        remaining[k] = v;
+      }
+    }
+    if (Object.keys(remaining).length > 0) {
+      html += `
+        <div class="section">
+          <div class="section-header">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <h2>Additional EXIF</h2>
+          </div>
+          <div class="section-body">${buildKVTable(remaining)}</div>
+        </div>`;
+    }
+  }
+
+  return html;
+}
+
+function buildPNGDetailsHTML(ihdr) {
+  if (!ihdr) return '';
+  const rows = [
+    ['Width', ihdr.width + ' px'],
+    ['Height', ihdr.height + ' px'],
+    ['Bit Depth', ihdr.bitDepth + '-bit'],
+    ['Color Type', ihdr.colorTypeLabel],
+    ['Compression', ihdr.compression],
+    ['Filter', ihdr.filter],
+    ['Interlace', ihdr.interlace],
+  ].map(([k, v]) => `<tr><td class="meta-key">${k}</td><td class="meta-val">${esc(v)}</td></tr>`).join('');
+
+  return `
+    <div class="section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        <h2>PNG Details</h2>
+      </div>
+      <div class="section-body">
+        <table class="meta-table">${rows}</table>
+      </div>
+    </div>`;
+}
+
+function buildPNGChunksHTML(chunks) {
+  if (!chunks.length) return '';
+  const rows = chunks.map(c => {
+    const isCritical = c.type[0] === c.type[0].toUpperCase();
+    const labels = { IHDR:'image header', iCCP:'ICC profile', tEXt:'text', IDAT:'image data', IEND:'end', pHYs:'physical dimensions', gAMA:'gamma', cHRM:'chromaticities', sRGB:'sRGB rendering', bKGD:'background', tIME:'last modified', tRNS:'transparency', sBIT:'significant bits', sPLT:'suggested palette', hIST:'histogram', zTXt:'compressed text', iTXt:'international text' };
+    return `<tr><td class="meta-key"><span class="chunk-badge ${isCritical ? 'critical' : 'ancillary'}">${esc(c.type)}</span></td><td class="meta-val">${humanBytes(c.length)}${labels[c.type] ? ' (' + labels[c.type] + ')' : ''}</td></tr>`;
+  }).join('');
+
+  return `
+    <div class="section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <h2>PNG Chunks</h2>
+      </div>
+      <div class="section-body">
+        <table class="meta-table">${rows}</table>
+        <p class="meta-note">${chunks.length} chunks · critical = uppercase, ancillary = lowercase</p>
+      </div>
+    </div>`;
+}
+
+/* ── main logic ──────────────────────────────────────── */
+
+async function processFile(file, bytes) {
+  const drop = $('#drop-zone');
+  const results = $('#results');
+  drop.classList.add('hidden');
+  results.classList.remove('hidden');
+
+  const img = new Image();
+  const dims = await new Promise((resolve) => {
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w: 0, h: 0 });
+    img.src = URL.createObjectURL(file);
+  });
+
+  let exifData = null, xmpData = null, iptcData = null, iccpData = null;
+  try { exifData = await exifr.parse(bytes, { tiff: true, xmp: true, iptc: true, icc: true, mergeOutput: false }); } catch {}
+  if (exifData) {
+    if (exifData.tiff) exifData = { ...exifData.tiff, ...exifData };
+    if (exifData.exif) exifData = { ...exifData.exif, ...exifData };
+    if (exifData.ifd0) exifData = { ...exifData.ifd0, ...exifData };
+    if (exifData.icc) iccpData = exifData.icc;
+    if (exifData.xmp) xmpData = exifData.xmp;
+    if (exifData.iptc) iptcData = exifData.iptc;
+  }
+
+  const w = dims.w || exifData?.ExifImageWidth || exifData?.ImageWidth || 0;
+  const h = dims.h || exifData?.ExifImageHeight || exifData?.ImageHeight || 0;
+  const xres = exifData?.XResolution;
+  const yres = exifData?.YResolution;
+  const dpi = xres ? Math.round(typeof xres === 'object' ? xres.numerator / xres.denominator : xres) : null;
+  const colorSpace = exifData?.ColorSpace === 1 ? 'sRGB' : exifData?.ColorSpace === 65535 ? 'Uncalibrated' : iccpData?.ColorSpaceData || '';
+  const format = file.type.split('/')[1]?.toUpperCase() || 'Unknown';
+
+  const pngChunks = format === 'PNG' ? parsePNGChunks(bytes) : [];
+  const pngText = format === 'PNG' ? parsePNGTextChunks(bytes, pngChunks) : null;
+  const ihdr = format === 'PNG' ? parsePNGIHDR(bytes, pngChunks) : null;
+
+  const previewURL = URL.createObjectURL(file);
+  let html = '';
+
+  html += `<div class="preview-card"><img src="${previewURL}" alt="${esc(file.name)}" loading="lazy"></div>`;
+
+  const colorLabel = colorSpace || (ihdr ? ihdr.colorTypeLabel : '');
+  const bitDepthLabel = ihdr ? ihdr.bitDepth + '-bit' : (exifData?.BitsPerSample ? exifData.BitsPerSample + '-bit' : '');
+
+  html += `<div class="quick-facts">
+    ${factCard('Weight', humanBytes(file.size), 'weight')}
+    ${factCard('Dimensions', w && h ? `${w} × ${h}` : '—', 'dimensions')}
+    ${factCard('Megapixels', w && h ? megapixels(w, h) + ' MP' : '—', 'megapixels')}
+    ${factCard('Aspect', w && h ? aspectRatio(w, h) : '—', 'aspect')}
+    ${factCard('Resolution', dpi ? dpi + ' DPI' : '—', 'dpi')}
+    ${factCard('Color', colorLabel || '—', 'color')}
+    ${factCard('Bit Depth', bitDepthLabel || '—', 'bitdepth')}
+    ${factCard('Format', format, 'format')}
+    ${factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation')}
+  </div>`;
+
+  html += buildCameraSection(exifData);
+  html += buildGenerationSection(pngText);
+  html += buildPNGDetailsHTML(ihdr);
+  html += buildMetadataSections(exifData, xmpData, iptcData, iccpData, pngText);
+  if (format === 'PNG') html += buildPNGChunksHTML(pngChunks);
+  html += buildMagicHTML(bytes);
+
+  const rawObj = {
+    file: { name: file.name, size: file.size, type: file.type, lastModified: new Date(file.lastModified).toISOString() },
+    dimensions: { width: w, height: h },
+    ...(ihdr ? { png: ihdr } : {}),
+    ...(pngText && Object.keys(pngText).length ? { pngText } : {}),
+    exif: exifData || null,
+    xmp: xmpData || null,
+    iptc: iptcData || null,
+    icc: iccpData || null,
+  };
+  window._rawData = rawObj;
+  html += `
+    <div class="section">
+      <div class="section-header">
+        <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <h2>Raw JSON</h2>
+      </div>
+      <div class="section-body">
+        <button class="copy-btn" onclick="copyRaw()">Copy to clipboard</button>
+        <pre class="json-pre" id="raw-json"></pre>
+      </div>
+    </div>`;
+
+  results.innerHTML = html;
+  const rawEl = document.getElementById('raw-json');
+  if (rawEl) {
+    rawEl.textContent = JSON.stringify(rawObj, (_, v) => typeof v === 'bigint' ? v.toString() : v instanceof ArrayBuffer ? `[ArrayBuffer ${v.byteLength} bytes]` : ArrayBuffer.isView(v) ? `[${v.constructor.name} ${v.length} items]` : v, 2);
+  }
+}
+
+function copyRaw() {
+  if (window._rawData) {
+    const text = JSON.stringify(window._rawData, (_, v) => typeof v === 'bigint' ? v.toString() : v instanceof ArrayBuffer ? `[ArrayBuffer ${v.byteLength} bytes]` : ArrayBuffer.isView(v) ? `[${v.constructor.name} ${v.length} items]` : v, 2);
+    navigator.clipboard.writeText(text);
+  }
+}
+
+function factCard(label, value, icon) {
+  const icons = {
+    weight: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>',
+    dimensions: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h18"/>',
+    megapixels: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
+    aspect: '<rect x="2" y="4" width="20" height="16" rx="2"/>',
+    dpi: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>',
+    color: '<circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20"/>',
+    bitdepth: '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 7h4v4H7zM13 7h4v4h-4zM7 13h4v4H7zM13 13h4v4h-4z"/>',
+    format: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+    orientation: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  };
+  return `<div class="fact-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[icon] || ''}</svg><span class="fact-label">${label}</span><span class="fact-value">${esc(String(value))}</span></div>`;
+}
+
+/* ── drop / paste / file input ───────────────────────── */
+
+const dropZone = $('#drop-zone');
+const fileInput = $('#file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadFile(file);
+});
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+
+document.addEventListener('paste', e => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      loadFile(item.getAsFile());
+      break;
+    }
+  }
+});
+
+async function loadFile(file) {
+  dropZone.classList.add('loading');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  await processFile(file, bytes);
+}
+
+/* ── URL param ───────────────────────────────────────── */
+
+const params = new URLSearchParams(location.search);
+const urlParam = params.get('url');
+if (urlParam) {
+  dropZone.classList.add('loading');
+  try {
+    const resp = await fetch(urlParam);
+    const blob = await resp.blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const file = new File([blob], urlParam.split('/').pop() || 'image', { type: blob.type });
+    await processFile(file, bytes);
+  } catch {
+    dropZone.classList.remove('loading');
+    alert('Could not load image from URL. CORS may be blocking the request.');
+  }
+}
+
+/* ── theme toggle ────────────────────────────────────── */
+
+$('#theme-toggle')?.addEventListener('click', () => {
+  document.documentElement.classList.toggle('light');
+});
+
+/* ── expose to global for inline onclick handlers ────── */
+window.copyRaw = copyRaw;
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --bg2: #1a1d27;
+  --bg3: #232733;
+  --bg4: #2e3241;
+  --text: #e4e4e7;
+  --text2: #a1a1aa;
+  --text3: #71717a;
+  --accent: #6c63ff;
+  --accent2: #8b83ff;
+  --glow: rgba(108, 99, 255, 0.15);
+  --border: #2e3241;
+  --success: #22c55e;
+  --radius: 12px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+
+html.light {
+  --bg: #f8f9fb;
+  --bg2: #ffffff;
+  --bg3: #f0f1f5;
+  --bg4: #e2e4ea;
+  --text: #1a1a2e;
+  --text2: #52525b;
+  --text3: #71717a;
+  --border: #e2e4ea;
+  --glow: rgba(108, 99, 255, 0.08);
+  --shadow: 0 4px 24px rgba(0,0,0,0.06);
+}
+
+html { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+body { min-height: 100vh; }
+
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+  backdrop-filter: blur(12px);
+}
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+.logo svg { width: 28px; height: 28px; color: var(--accent); }
+#theme-toggle {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+  width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+}
+#theme-toggle:hover { background: var(--bg4); color: var(--text); }
+
+#drop-zone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: calc(100vh - 73px);
+  padding: 40px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  border: 2px dashed var(--border);
+  margin: 24px;
+  border-radius: var(--radius);
+}
+#drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--glow);
+  transform: scale(1.01);
+}
+#drop-zone.loading { pointer-events: none; opacity: 0.6; }
+#drop-zone svg { width: 64px; height: 64px; color: var(--accent); margin-bottom: 24px; }
+#drop-zone h2 { font-size: 24px; margin-bottom: 8px; }
+#drop-zone p { color: var(--text2); font-size: 15px; }
+#drop-zone .sub { margin-top: 16px; font-size: 13px; color: var(--text3); }
+
+#results { display: none; max-width: 1100px; margin: 0 auto; padding: 24px; }
+#results:not(.hidden) { display: block; }
+
+.preview-card {
+  background: var(--bg2);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.preview-card img {
+  max-width: 100%; max-height: 60vh;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.quick-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.fact-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  text-align: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.fact-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.fact-card svg { width: 22px; height: 22px; color: var(--accent); }
+.fact-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+.fact-value { font-size: 15px; font-weight: 600; word-break: break-word; }
+
+.section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.section-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 20px;
+  user-select: none;
+}
+.section-icon { width: 20px; height: 20px; color: var(--accent); flex-shrink: 0; }
+.section-header h2 { font-size: 16px; font-weight: 600; flex: 1; }
+.section-body { padding: 0 20px 20px; }
+
+.meta-table { width: 100%; border-collapse: collapse; }
+.meta-table tr { border-bottom: 1px solid var(--border); }
+.meta-table tr:last-child { border-bottom: none; }
+.meta-table td { padding: 10px 4px; vertical-align: top; }
+.meta-key { color: var(--text2); font-size: 13px; white-space: nowrap; padding-right: 24px; font-weight: 500; }
+.meta-val { color: var(--text); font-size: 13px; word-break: break-word; }
+.meta-note { font-size: 12px; color: var(--text3); margin-top: 12px; font-style: italic; }
+.empty { color: var(--text3); font-style: italic; padding: 16px 0; }
+
+.chunk-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chunk-badge.critical { background: rgba(108,99,255,0.15); color: var(--accent); }
+.chunk-badge.ancillary { background: rgba(34,197,94,0.15); color: var(--success); }
+
+.magic-section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.magic-section .section-header { padding: 0 0 16px; }
+.magic-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.magic-sub { color: var(--text2); font-size: 14px; }
+.hex-dump {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.hex-row span { display: inline-block; width: 28px; text-align: center; color: var(--text2); }
+.hex-row span.sig { color: var(--accent); font-weight: 700; background: var(--glow); border-radius: 3px; }
+.ascii-row { color: var(--text3); margin-top: 4px; font-size: 12px; letter-spacing: 1px; }
+.dna-strip { display: flex; gap: 2px; margin: 16px 0; }
+.dna-strip span { width: 100%; height: 24px; border-radius: 3px; transition: transform 0.15s; }
+.dna-strip span:hover { transform: scaleY(1.5); }
+.magic-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text3); margin-top: 8px; }
+
+.copy-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  transition: background 0.2s;
+}
+.copy-btn:hover { background: var(--accent2); }
+.prompt-text {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 16px;
+  overflow: auto;
+  max-height: 400px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.json-pre {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 16px;
+  overflow: auto;
+  max-height: 600px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .quick-facts { grid-template-columns: repeat(3, 1fr); }
+  #drop-zone { margin: 12px; min-height: 70vh; }
+  #results { padding: 12px; }
+  .hex-dump { font-size: 11px; }
+  .hex-row span { width: 22px; }
+}
+
+.hidden { display: none !important; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+#results:not(.hidden) > * { animation: fadeIn 0.3s ease both; }
+#results:not(.hidden) > *:nth-child(1) { animation-delay: 0.05s; }
+#results:not(.hidden) > *:nth-child(2) { animation-delay: 0.1s; }
+#results:not(.hidden) > *:nth-child(3) { animation-delay: 0.15s; }
+#results:not(.hidden) > *:nth-child(4) { animation-delay: 0.2s; }
+#results:not(.hidden) > *:nth-child(5) { animation-delay: 0.25s; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+    Image Meta Viewer
+  </div>
+  <button id="theme-toggle" aria-label="Toggle theme">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+  </button>
+</header>
+
+<div id="drop-zone">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+  <h2>Drop an image here</h2>
+  <p>or click to browse your files</p>
+  <p class="sub">You can also paste an image from your clipboard (Ctrl/Cmd+V)</p>
+  <input type="file" id="file-input" accept="image/*" hidden>
+</div>
+
+<div id="results" class="hidden"></div>
+
+</body>
+</html>
