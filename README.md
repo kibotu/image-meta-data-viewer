@@ -58,7 +58,7 @@ JPEG, PNG, WebP, GIF, TIFF, HEIC, AVIF, BMP, SVG, ICO
 
 ## How to Use
 
-1. **Open** [the live site](https://kibotu.github.io/image-meta-data/)
+1. **Open** [the live site](https://kibotu.github.io/image-meta-data-viewer/)
 2. **Drop** an image onto the page (or click to browse, or paste with Ctrl/Cmd+V)
 3. **Explore** every detail about your image
 
@@ -86,7 +86,7 @@ php -S localhost:8000
 Load an image from a URL directly:
 
 ```
-https://kibotu.github.io/image-meta-data/?url=https://example.com/photo.jpg
+https://kibotu.github.io/image-meta-data-viewer/?url=https://example.com/photo.jpg
 ```
 
 > Note: The image URL must allow CORS for client-side fetching.

@@ -645,13 +645,23 @@ async function loadFile(file) {
 const urlParam = new URLSearchParams(location.search).get('url');
 if (urlParam) {
   dropZone.classList.add('loading');
+  async function fetchImage(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(resp.statusText);
+    return resp;
+  }
   try {
-    const resp = await fetch(urlParam);
+    let resp;
+    try {
+      resp = await fetchImage(urlParam);
+    } catch {
+      resp = await fetchImage('https://corsproxy.io/?' + encodeURIComponent(urlParam));
+    }
     const blob = await resp.blob();
     await processFile(new File([blob], urlParam.split('/').pop() || 'image', { type: blob.type }), new Uint8Array(await blob.arrayBuffer()));
   } catch {
     dropZone.classList.remove('loading');
-    alert('Could not load image from URL. CORS may be blocking the request.');
+    alert('Could not load image from URL. The server may be blocking access.');
   }
 }
 
