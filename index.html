@@ -387,8 +387,16 @@ function buildGenerationSection(pngText, exifPromptTexts) {
   }
 
   if (found.Workflow) {
-    html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
-      `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>`);
+    let workflowData;
+    try { workflowData = JSON.parse(found.Workflow); } catch { workflowData = found.Workflow; }
+    if (typeof workflowData === 'object') {
+      window._workflowData = workflowData;
+      html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
+        `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button> <button class="copy-btn" onclick="downloadWorkflow()">Download workflow.json</button><pre class="json-pre" id="workflow-json"></pre>`);
+    } else {
+      html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
+        `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>`);
+    }
   }
 
   const other = {};
@@ -439,8 +447,6 @@ function buildMetadataSections(exif, xmp, iptc, iccp, pngText) {
   if (userComment && typeof userComment === 'string') {
     html += buildSection('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>', 'Comments', `<p class="meta-val">${esc(userComment)}</p>`);
   }
-
-  html += buildICCSection(iccp);
 
   if (exif) {
     const cameraKeys = new Set(['Make','Model','LensModel','FNumber','ExposureTime','ISO','FocalLength','FocalLengthIn35mmFormat','Flash','WhiteBalance','MeteringMode','ExposureProgram','DateTimeOriginal','DateTimeDigitized','DateTime','latitude','longitude','GPSLatitude','GPSLongitude','GPSLatitudeRef','GPSLongitudeRef','GPSAltitude','UserComment','usercomment','Orientation','ImageWidth','ImageHeight','ExifImageWidth','ExifImageHeight','XResolution','YResolution','ResolutionUnit','Software','Artist','Copyright','ColorSpace','BitsPerSample','Compression','PhotometricInterpretation','SamplesPerPixel','PlanarConfiguration','YCbCrSubSampling','YCbCrPositioning','ExifVersion','FlashpixVersion','SceneCaptureType','DigitalZoomRatio','SubjectDistance','MaxApertureValue','LightSource','ExposureBiasValue','ExposureMode','ExposureIndex','SensingMethod','FileSource','CustomRendered','GainControl','Contrast','Saturation','Sharpness','SubjectDistanceRange','InteroperabilityIndex','thumbnail']);
@@ -534,14 +540,15 @@ async function processFile(file, bytes) {
     ${factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation')}
   </div>`;
 
-  html += buildCameraSection(exifData);
   const exifPromptTexts = extractPromptFromMetadata({ EXIF: exifData, XMP: xmpData, IPTC: iptcData, 'PNG Text': pngText });
   html += buildGenerationSection(pngText, exifPromptTexts);
+  html += buildCameraSection(exifData);
+  html += buildICCSection(iccpData);
   html += buildPNGDetailsHTML(ihdr);
   html += buildMetadataSections(exifData, xmpData, iptcData, iccpData, pngText);
   html += buildNestedJSONSection(extractNestedJSON({ EXIF: exifData, XMP: xmpData, IPTC: iptcData, 'PNG Text': pngText }));
-  if (format === 'PNG') html += buildPNGChunksHTML(pngChunks);
   html += buildMagicHTML(bytes);
+  if (format === 'PNG') html += buildPNGChunksHTML(pngChunks);
 
   const rawObj = {
     file: { name: file.name, size: file.size, type: file.type, lastModified: new Date(file.lastModified).toISOString() },
@@ -560,12 +567,24 @@ async function processFile(file, bytes) {
   results.innerHTML = html;
   const rawEl = document.getElementById('raw-json');
   if (rawEl) rawEl.textContent = JSON.stringify(rawObj, (_, v) => typeof v === 'bigint' ? v.toString() : v instanceof ArrayBuffer ? `[ArrayBuffer ${v.byteLength} bytes]` : ArrayBuffer.isView(v) ? `[${v.constructor.name} ${v.length} items]` : v, 2);
+  const workflowEl = document.getElementById('workflow-json');
+  if (workflowEl && window._workflowData) workflowEl.textContent = JSON.stringify(window._workflowData, null, 2);
 }
 
 function copyRaw() {
   if (window._rawData) {
     navigator.clipboard.writeText(JSON.stringify(window._rawData, (_, v) => typeof v === 'bigint' ? v.toString() : v instanceof ArrayBuffer ? `[ArrayBuffer ${v.byteLength} bytes]` : ArrayBuffer.isView(v) ? `[${v.constructor.name} ${v.length} items]` : v, 2));
   }
+}
+
+function downloadWorkflow() {
+  if (!window._workflowData) return;
+  const blob = new Blob([JSON.stringify(window._workflowData, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'workflow.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function factCard(label, value, icon) {
