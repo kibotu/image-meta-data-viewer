@@ -388,11 +388,11 @@ function buildGenerationSection(pngText, exifPromptTexts) {
 
   if (found.Workflow) {
     let workflowData;
-    try { workflowData = JSON.parse(found.Workflow); } catch { workflowData = found.Workflow; }
-    if (typeof workflowData === 'object') {
+    try { workflowData = JSON.parse(found.Workflow); } catch { workflowData = null; }
+    if (workflowData && typeof workflowData === 'object') {
       window._workflowData = workflowData;
       html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
-        `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button> <button class="copy-btn" onclick="downloadWorkflow()">Download workflow.json</button><pre class="json-pre" id="workflow-json"></pre>`);
+        `<div class="workflow-actions"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.textContent)">Copy</button><button class="copy-btn download-btn" onclick="downloadWorkflow()">Download workflow.json</button></div><pre class="json-pre" id="workflow-json"></pre>`);
     } else {
       html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
         `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>`);
@@ -425,22 +425,6 @@ function buildMetadataSections(exif, xmp, iptc, iccp, pngText) {
 
   if (iptc && Object.keys(iptc).length > 0) {
     html += buildSection('<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>', 'IPTC Metadata', buildKVTable(iptc));
-  }
-
-  if (pngText) {
-    const genKeys = new Set(['Prompt', 'Workflow', 'parameters', 'Source', 'Software', 'Creation Time', 'Creation Process']);
-    const other = {};
-    for (const [k, v] of Object.entries(pngText)) {
-      if (!genKeys.has(k)) other[k] = v;
-    }
-    if (Object.keys(other).length) {
-      const rows = Object.entries(other).map(([k, v]) => {
-        const display = formatJSON(v);
-        return `<tr><td class="meta-key">${esc(k)}</td><td class="meta-val">${display.length > 500 ? `<pre class="json-pre">${esc(display)}</pre>` : esc(display)}</td></tr>`;
-      }).join('');
-      html += buildSection('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="16" x2="12" y2="21"/>', 'Embedded Text',
-        `<table class="meta-table">${rows}</table>`);
-    }
   }
 
   const userComment = exif?.UserComment || exif?.usercomment;
@@ -595,7 +579,7 @@ function downloadWorkflow() {
   URL.revokeObjectURL(a.href);
 }
 
-function factCard(label, value, icon) {
+function factCard(label, value, icon, title) {
   const icons = {
     weight: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>',
     dimensions: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h18"/>',
@@ -607,7 +591,7 @@ function factCard(label, value, icon) {
     format: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
     orientation: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   };
-  return `<div class="fact-card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[icon] || ''}</svg><span class="fact-label">${label}</span><span class="fact-value">${esc(String(value))}</span></div>`;
+  return `<div class="fact-card"${title ? ` title="${esc(title)}"` : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[icon] || ''}</svg><span class="fact-label">${label}</span><span class="fact-value">${esc(String(value))}</span></div>`;
 }
 
 /* ── drop / paste / file input ───────────────────────── */
@@ -722,6 +706,9 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .magic-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text3); margin-top: 8px; }
 .copy-btn { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; margin-bottom: 12px; transition: background 0.2s; }
 .copy-btn:hover { background: var(--accent2); }
+.copy-btn.download-btn { background: var(--success); }
+.copy-btn.download-btn:hover { background: #16a34a; }
+.workflow-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .prompt-text { background: var(--bg); border-radius: 8px; padding: 16px; overflow: auto; max-height: 400px; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .json-pre { background: var(--bg); border-radius: 8px; padding: 16px; overflow: auto; max-height: 600px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; color: var(--text2); white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 640px) {
