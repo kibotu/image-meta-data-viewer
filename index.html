@@ -528,23 +528,30 @@ async function processFile(file, bytes) {
 
   let html = `<div class="preview-card"><img src="${URL.createObjectURL(file)}" alt="${esc(file.name)}" loading="lazy"></div>`;
 
-  html += `<div class="quick-facts">
-    ${factCard('Weight', humanBytes(file.size), 'weight')}
-    ${factCard('Dimensions', w && h ? `${w} × ${h}` : '—', 'dimensions')}
-    ${factCard('Megapixels', w && h ? megapixels(w, h) + ' MP' : '—', 'megapixels')}
-    ${factCard('Aspect', w && h ? aspectRatio(w, h) : '—', 'aspect')}
-    ${factCard('Resolution', dpi ? dpi + ' DPI' : '—', 'dpi')}
-    ${factCard('Color', colorLabel || '—', 'color')}
-    ${factCard('Bit Depth', bitDepthLabel || '—', 'bitdepth')}
-    ${factCard('Format', format, 'format')}
-    ${factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation')}
-  </div>`;
+  let facts = [
+    factCard('Weight', humanBytes(file.size), 'weight'),
+    factCard('Dimensions', w && h ? `${w} × ${h}` : '—', 'dimensions'),
+    factCard('Megapixels', w && h ? megapixels(w, h) + ' MP' : '—', 'megapixels'),
+    factCard('Aspect', w && h ? aspectRatio(w, h) : '—', 'aspect'),
+    factCard('Resolution', dpi ? dpi + ' DPI' : '—', 'dpi'),
+    factCard('Color', colorLabel || '—', 'color'),
+    factCard('Bit Depth', bitDepthLabel || '—', 'bitdepth'),
+    factCard('Format', format, 'format'),
+    factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation'),
+  ];
+
+  if (ihdr) {
+    if (ihdr.compression !== 'Deflate/Inflate') facts.push(factCard('Compression', ihdr.compression, 'format'));
+    if (ihdr.filter !== 'Adaptive') facts.push(factCard('Filter', ihdr.filter, 'format'));
+    if (ihdr.interlace !== 'Noninterlaced') facts.push(factCard('Interlace', ihdr.interlace, 'format'));
+  }
+
+  html += `<div class="quick-facts">${facts.join('')}</div>`;
 
   const exifPromptTexts = extractPromptFromMetadata({ EXIF: exifData, XMP: xmpData, IPTC: iptcData, 'PNG Text': pngText });
   html += buildGenerationSection(pngText, exifPromptTexts);
   html += buildCameraSection(exifData);
   html += buildICCSection(iccpData);
-  html += buildPNGDetailsHTML(ihdr);
   html += buildMetadataSections(exifData, xmpData, iptcData, iccpData, pngText);
   html += buildNestedJSONSection(extractNestedJSON({ EXIF: exifData, XMP: xmpData, IPTC: iptcData, 'PNG Text': pngText }));
   html += buildMagicHTML(bytes);
