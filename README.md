@@ -4,7 +4,7 @@
 
 Drag an image. Get every detail. No uploads, no servers, no tracking.
 
-👉 **[Try it now](https://kibotu.github.io/image-meta-data/)**
+👉 **[Try it now](https://kibotu.github.io/image-meta-data-viewer/)**
 
 ---
 

@@ -529,6 +529,7 @@ async function processFile(file, bytes) {
   let html = `<div class="preview-card"><img src="${URL.createObjectURL(file)}" alt="${esc(file.name)}" loading="lazy"></div>`;
 
   let facts = [
+    factCard('Name', esc(file.name.length > 20 ? file.name.slice(0, 17) + '…' : file.name), 'format', file.name),
     factCard('Weight', humanBytes(file.size), 'weight'),
     factCard('Dimensions', w && h ? `${w} × ${h}` : '—', 'dimensions'),
     factCard('Megapixels', w && h ? megapixels(w, h) + ' MP' : '—', 'megapixels'),
@@ -538,12 +539,12 @@ async function processFile(file, bytes) {
     factCard('Bit Depth', bitDepthLabel || '—', 'bitdepth'),
     factCard('Format', format, 'format'),
     factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation'),
+    factCard('Permissions', '—', 'format'),
   ];
 
   if (ihdr) {
-    if (ihdr.compression !== 'Deflate/Inflate') facts.push(factCard('Compression', ihdr.compression, 'format'));
-    if (ihdr.filter !== 'Adaptive') facts.push(factCard('Filter', ihdr.filter, 'format'));
-    if (ihdr.interlace !== 'Noninterlaced') facts.push(factCard('Interlace', ihdr.interlace, 'format'));
+    facts.push(factCard('Filter', ihdr.filter, 'format'));
+    facts.push(factCard('Interlace', ihdr.interlace, 'format'));
   }
 
   html += `<div class="quick-facts">${facts.join('')}</div>`;
