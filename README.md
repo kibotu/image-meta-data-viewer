@@ -10,7 +10,7 @@ Drag an image. Get every detail. No uploads, no servers, no tracking.
 
 ## Why This Exists
 
-Every day, photographers, designers, developers, and even CEOs need to answer simple questions about images:
+Every day, photographers, designers, developers need to answer simple questions about images:
 
 - *"Is this image really 300 DPI or did someone lie?"*
 - *"What camera took this photo?"*
