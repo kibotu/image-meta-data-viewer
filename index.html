@@ -3,9 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0f1117" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f8f9fb" media="(prefers-color-scheme: light)">
 <title>Image Meta Data Viewer</title>
 <meta name="description" content="See everything about your image — instantly, privately, in your browser.">
-<script src="vendor/exifr.js"></script>
+<script src="vendor/exifr.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js';"></script>
 <script type="module">
 
 const exifr = window.exifr;
@@ -39,7 +41,7 @@ function orientationLabel(w, h, exifOrient) {
 
 function esc(s) {
   const d = document.createElement('div');
-  d.textContent = String(s);
+  d.textContent = String(s ?? '');
   return d.innerHTML;
 }
 
@@ -123,7 +125,7 @@ function buildNestedJSONSection(nestedItems) {
         <h2>${esc(item.label)}</h2>
       </div>
       <div class="section-body">
-        <button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button>
+        <button class="copy-btn" data-copy="next">Copy</button>
         <pre class="json-pre">${esc(JSON.stringify(item.data, null, 2))}</pre>
       </div>
     </div>`).join('');
@@ -378,12 +380,12 @@ function buildGenerationSection(pngText, exifPromptTexts) {
 
   if (exifPromptTexts.length) {
     html += buildSection('<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>', 'Prompt',
-      `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="prompt-text">${esc(exifPromptTexts.join('\n\n---\n\n'))}</pre>`);
+      `<button class="copy-btn" data-copy="next">Copy</button><pre class="prompt-text">${esc(exifPromptTexts.join('\n\n---\n\n'))}</pre>`);
   }
 
   if (found.Prompt) {
     html += buildSection('<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>', 'PNG Prompt',
-      `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="prompt-text">${esc(formatJSON(found.Prompt))}</pre>`);
+      `<button class="copy-btn" data-copy="next">Copy</button><pre class="prompt-text">${esc(formatJSON(found.Prompt))}</pre>`);
   }
 
   if (found.Workflow) {
@@ -392,10 +394,10 @@ function buildGenerationSection(pngText, exifPromptTexts) {
     if (workflowData && typeof workflowData === 'object') {
       window._workflowData = workflowData;
       html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
-        `<div class="workflow-actions"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.parentElement.nextElementSibling.textContent)">Copy</button><button class="copy-btn download-btn" onclick="downloadWorkflow()">Download workflow.json</button></div><pre class="json-pre" id="workflow-json"></pre>`);
+        `<div class="workflow-actions"><button class="copy-btn" data-copy="next">Copy</button><button class="copy-btn download-btn" data-action="download-workflow">Download workflow.json</button></div><pre class="json-pre" id="workflow-json"></pre>`);
     } else {
       html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Workflow',
-        `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent)">Copy</button><pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>`);
+        `<button class="copy-btn" data-copy="next">Copy</button><pre class="json-pre">${esc(formatJSON(found.Workflow))}</pre>`);
     }
   }
 
@@ -523,7 +525,6 @@ async function processFile(file, bytes) {
     factCard('Bit Depth', bitDepthLabel || '—', 'bitdepth'),
     factCard('Format', format, 'format'),
     factCard('Orientation', w && h ? orientationLabel(w, h, exifData?.Orientation) : '—', 'orientation'),
-    factCard('Permissions', '—', 'format'),
   ];
 
   if (ihdr) {
@@ -554,7 +555,7 @@ async function processFile(file, bytes) {
   };
   window._rawData = rawObj;
   html += buildSection('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', 'Raw JSON',
-    `<button class="copy-btn" onclick="copyRaw()">Copy to clipboard</button><pre class="json-pre" id="raw-json"></pre>`);
+    `<button class="copy-btn" data-action="copy-raw">Copy to clipboard</button><pre class="json-pre" id="raw-json"></pre>`);
 
   results.innerHTML = html;
   const rawEl = document.getElementById('raw-json');
