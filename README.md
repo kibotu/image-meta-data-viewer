@@ -6,8 +6,6 @@ Drag an image. Get every detail. No uploads, no servers, no tracking.
 
 👉 **[Try it now](https://kibotu.github.io/image-meta-data-viewer/)**
 
-![Screenshot](docs/screenshot.png)
-
 ---
 
 ## Why This Exists
@@ -32,6 +30,8 @@ Image Meta Data Viewer solves this with a **single webpage** that runs entirely 
 - **Works offline** once loaded
 - **Mobile-friendly** — inspect images on your phone
 - **Zero install** — just open the URL
+
+![Screenshot](docs/screenshot.png)
 
 ### What You'll See
 
