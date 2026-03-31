@@ -6,6 +6,8 @@ Drag an image. Get every detail. No uploads, no servers, no tracking.
 
 👉 **[Try it now](https://kibotu.github.io/image-meta-data-viewer/)**
 
+![Screenshot](docs/screenshot.png)
+
 ---
 
 ## Why This Exists
